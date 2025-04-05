@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn==0.18.3
+tensorflow==2.15.0
+pillow==9.4.0
+matplotlib==3.7.1
+keras==2.15.0
