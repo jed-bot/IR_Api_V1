@@ -1,68 +1,87 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
 from io import BytesIO
 from keras.models import load_model
 from keras.preprocessing import image
 import numpy as np
-import os
 from PIL import Image
-import io
-import matplotlib.pyplot as plt
+import logging
+from functools import lru_cache
 
 # Initialize FastAPI app
 app = FastAPI()
 
-# Load your trained model
-try:
-    model = load_model("ingredient_classifier_200_epochs.h5")  # Load the model
-    print("✅ Model loaded successfully!")
-except Exception as e:
-    print(f"❌ Error loading model: {e}")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Ingredient labels (adjust these based on your dataset)
-class_labels = [
+# Cache the model loading to prevent reloading on each request
+@lru_cache(maxsize=1)
+def load_ml_model():
+    try:
+        model = load_model("ingredient_classifier_200_epochs.h5")
+        logger.info("✅ Model loaded successfully!")
+        return model
+    except Exception as e:
+        logger.error(f"❌ Error loading model: {e}")
+        raise HTTPException(status_code=500, detail="Model loading failed")
+
+# Ingredient labels
+CLASS_LABELS = [
     'Bitter_m', 'Calamansi', 'Eggplant', 'Garlic', 'Ginger',
     'Okra', 'Onion', 'Pork', 'Potato', 'Squash', 'Tomato'
 ]
 
-# Function to preprocess the image
 def preprocess_image(img):
-    img = img.resize((224, 224))  # Resize image to match model's expected input
-    img_array = np.array(img)  # Convert to array
-    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
-    img_array = img_array / 255.0  # Normalize
-    return img_array
-
-# Function to predict the ingredient
-def predict_ingredient(img: UploadFile):
+    """Preprocess image for model prediction"""
     try:
-        img_bytes = img.file.read()  # Read the image bytes
-        img = Image.open(BytesIO(img_bytes))  # Open the image using PIL
-
-        processed_image = preprocess_image(img)  # Preprocess the image
-        predictions = model.predict(processed_image)  # Make the prediction
-
-        # Get top 3 predictions
-        top_3_indices = np.argsort(predictions[0])[-3:][::-1]
-
-        # Prepare result
-        result = []
-        for idx in top_3_indices:
-            result.append({
-                "ingredient": class_labels[idx],
-                "confidence": float(predictions[0][idx] * 100)
-            })
-
-        return {"predictions": result}
-
+        img = img.resize((224, 224))
+        img_array = np.array(img)
+        img_array = np.expand_dims(img_array, axis=0)
+        return img_array / 255.0
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"Image preprocessing failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid image format")
 
-# Define an endpoint for predicting the ingredient from the image
+@app.get("/")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "message": "Ingredient Classifier API is running"}
+
 @app.post("/predict/")
-async def get_prediction(file: UploadFile = File(...)):
-    return predict_ingredient(file)
+async def predict_ingredient(file: UploadFile = File(...)):
+    """Predict ingredient from uploaded image"""
+    try:
+        # Validate file type
+        if not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="File must be an image")
+        
+        # Load model (cached)
+        model = load_ml_model()
+        
+        # Read and process image
+        contents = await file.read()
+        img = Image.open(BytesIO(contents))
+        processed_image = preprocess_image(img)
+        
+        # Make prediction
+        predictions = model.predict(processed_image)
+        top_3_indices = np.argsort(predictions[0])[-3:][::-1]
+        
+        # Format results
+        results = [{
+            "ingredient": CLASS_LABELS[idx],
+            "confidence": float(predictions[0][idx] * 100)
+        } for idx in top_3_indices]
+        
+        return JSONResponse(content={"predictions": results})
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Prediction failed: {e}")
+        raise HTTPException(status_code=500, detail="Prediction failed")
 
-# Run the app (use uvicorn to run it)
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=120)
