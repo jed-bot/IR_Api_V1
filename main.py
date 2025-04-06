@@ -1,68 +1,63 @@
 from fastapi import FastAPI, File, UploadFile
 from io import BytesIO
-from keras.models import load_model
-from keras.preprocessing import image
 import numpy as np
-import os
 from PIL import Image
-import io
-import matplotlib.pyplot as plt
+import tensorflow as tf  # Required for TFLite
 
-# Initialize FastAPI app
 app = FastAPI()
 
-# Load your trained model
+# Load TFLite model
 try:
-    model = load_model("ingredient_classifier_200_epochs.h5")  # Load the model
-    print("✅ Model loaded successfully!")
+    interpreter = tf.lite.Interpreter(model_path="ingredient_classifier.tflite")
+    interpreter.allocate_tensors()  # Allocate tensors
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    print(" Model loaded successfully!")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
+    print(f"❌ Error loading TFLite model: {e}")
 
-# Ingredient labels (adjust these based on your dataset)
+# Class labels (same as before)
 class_labels = [
     'Bitter_m', 'Calamansi', 'Eggplant', 'Garlic', 'Ginger',
     'Okra', 'Onion', 'Pork', 'Potato', 'Squash', 'Tomato'
 ]
 
-# Function to preprocess the image
+# Preprocess image (same as before)
 def preprocess_image(img):
-    img = img.resize((224, 224))  # Resize image to match model's expected input
-    img_array = np.array(img)  # Convert to array
-    img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
+    img = img.resize((224, 224))  # Adjust size if needed
+    img_array = np.array(img, dtype=np.float32)  # Use float32 for TFLite
+    img_array = np.expand_dims(img_array, axis=0)
     img_array = img_array / 255.0  # Normalize
     return img_array
 
-# Function to predict the ingredient
+# Predict using TFLite
 def predict_ingredient(img: UploadFile):
     try:
-        img_bytes = img.file.read()  # Read the image bytes
-        img = Image.open(BytesIO(img_bytes))  # Open the image using PIL
+        img_bytes = img.file.read()
+        img = Image.open(BytesIO(img_bytes))
+        processed_image = preprocess_image(img)
 
-        processed_image = preprocess_image(img)  # Preprocess the image
-        predictions = model.predict(processed_image)  # Make the prediction
+        # Set input tensor and run inference
+        interpreter.set_tensor(input_details[0]['index'], processed_image)
+        interpreter.invoke()
+        predictions = interpreter.get_tensor(output_details[0]['index'])
 
         # Get top 3 predictions
         top_3_indices = np.argsort(predictions[0])[-3:][::-1]
-
-        # Prepare result
-        result = []
-        for idx in top_3_indices:
-            result.append({
-                "ingredient": class_labels[idx],
-                "confidence": float(predictions[0][idx] * 100)
-            })
-
+        result = [
+            {"ingredient": class_labels[idx], "confidence": float(predictions[0][idx] * 100)}
+            for idx in top_3_indices
+        ]
         return {"predictions": result}
 
     except Exception as e:
         return {"error": str(e)}
 
-# Define an endpoint for predicting the ingredient from the image
+# FastAPI endpoint (same as before)
 @app.post("/predict/")
 async def get_prediction(file: UploadFile = File(...)):
     return predict_ingredient(file)
 
-# Run the app (use uvicorn to run it)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
