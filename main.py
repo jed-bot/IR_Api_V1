@@ -54,10 +54,11 @@ def predict_classification(uploaded_file: UploadFile):
         result = []
         for idx in top_3_indices:
             label = class_labels[idx]
-            confidence = predictions[idx] * 100
+            # Convert prediction to a Python float after rounding
+            confidence = float(round(predictions[idx] * 100, 2))
             result.append({
                 "ingredient": label,
-                "confidence": round(confidence, 2)
+                "confidence": confidence
             })
 
         # Annotate the image with the top prediction
@@ -69,7 +70,7 @@ def predict_classification(uploaded_file: UploadFile):
             font = ImageFont.load_default()
 
         top_label = class_labels[top_3_indices[0]]
-        top_conf = predictions[top_3_indices[0]] * 100
+        top_conf = float(round(predictions[top_3_indices[0]] * 100, 2))
         text = f"{top_label} {top_conf:.1f}%"
         draw.text((10, 10), text, fill="red", font=font)
 
